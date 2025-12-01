@@ -1,4 +1,5 @@
 extern crate iron;
+extern crate reqwest;
 extern crate router;
 #[macro_use] extern crate mime;
 
@@ -8,10 +9,18 @@ use iron::status;
 use router::Router;
 use urlencoded::UrlEncodedBody;
 
+use serde::Deserialize;
+use std::sync::{Arc, Mutex};
+use futures::executor::block_on;
+
+use tokio::runtime::Runtime;
+
+
 fn main() {
     let mut router = Router::new();
 
     router.get("/", get_form, "root");
+    router.get("/test", async_external_handler, "test");
     router.post("/gcd", post_gcd, "gcd");
 
     println!("Serving on http://localhost:3000...");
@@ -33,6 +42,44 @@ fn get_form(_request: &mut Request) -> IronResult<Response> {
         "#);
 
     Ok(response)
+}
+
+#[derive(Deserialize, Debug)]
+struct ExternalUser {
+    id: i32,
+    name: String,
+    email: String
+}
+
+
+fn async_external_handler(_req: &mut Request) -> IronResult<Response> {
+    // Создаем async runtime внутри handler
+    let rt = Runtime::new().unwrap();
+
+    let client = reqwest::Client::new();
+    
+    let response = rt.block_on(async {
+        let url = "http://127.0.0.1:8080/users/123";
+        client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("Reqwest error: {}", e))?
+            .json::<ExternalUser>()
+            .await
+            .map_err(|e| format!("JSON error: {}", e))
+    });
+    
+    match response {
+        Ok(user) => Ok(Response::with((
+            status::Ok,
+            format!("External user: id={}, name={}", user.id, user.name)
+        ))),
+        Err(e) => Ok(Response::with((
+            status::InternalServerError,
+            format!("Async error: {}", e)
+        )))
+    }
 }
 
 fn post_gcd(request: &mut Request) -> IronResult<Response> {
